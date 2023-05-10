@@ -1,0 +1,36 @@
+FROM tomcat:8.5-jdk8-corretto as builder
+
+ENV ZP_FILE=zeppelin-0.11.0-SNAPSHOT.tar.gz
+ENV DATA_DIR=$CATALINA_HOME/webapps/geonetwork/WEB-INF/data
+ENV JAVA_OPTS="-Djava.security.egd=file:/dev/./urandom -Djava.awt.headless=true -server -Xms512m -Xmx2024m -XX:NewSize=512m -XX:MaxNewSize=1024m -XX:+UseConcMarkSweepGC"
+
+WORKDIR $CATALINA_HOME/webapps
+
+COPY ./$ZP_FILE $CATALINA_HOME/webapps/$ZP_FILE
+
+RUN yum install -y unzip tar gzip hostname
+
+RUN mkdir -p zeppelin && \
+     tar -xvzf $ZP_FILE -C zeppelin --strip-components=1 && \
+     rm $ZP_FILE
+
+RUN mkdir -p $CATALINA_HOME/webapps/zeppelin/logs $CATALINA_HOME/webapps/zeppelin/run
+
+FROM tomcat:8.5-jdk8-corretto
+
+COPY --from=builder /usr/local/tomcat/webapps/zeppelin /usr/local/tomcat/webapps/zeppelin
+
+RUN yum install -y hostname
+
+ENV TINI_VERSION v0.18.0
+ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini /tini
+RUN chmod +x /tini
+ENTRYPOINT ["/tini", "--"]
+
+#USER 1000
+
+EXPOSE 8081
+
+WORKDIR /usr/local/tomcat/webapps/zeppelin
+CMD ["bin/zeppelin.sh"]
+
