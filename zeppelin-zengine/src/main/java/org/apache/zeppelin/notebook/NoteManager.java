@@ -21,10 +21,11 @@ package org.apache.zeppelin.notebook;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.Lock;
 import java.util.stream.Collectors;
 import javax.inject.Inject;
@@ -79,7 +80,7 @@ public class NoteManager {
   // build the tree structure of notes
   private void init() throws IOException {
     this.notesInfo = notebookRepo.list(AuthenticationInfo.ANONYMOUS).values().stream()
-        .collect(Collectors.toMap(NoteInfo::getId, NoteInfo::getPath));
+        .collect(Collectors.toConcurrentMap(NoteInfo::getId, NoteInfo::getPath));
     this.notesInfo.entrySet().stream()
         .forEach(entry ->
         {
@@ -181,7 +182,11 @@ public class NoteManager {
     } else {
       addOrUpdateNoteNode(new NoteInfo(note));
       noteCache.putNote(note);
-      this.notebookRepo.save(note, subject);
+      // Make sure to execute `notebookRepo.save()` successfully in concurrent context
+      // Otherwise, the NullPointerException will be thrown when invoking notebookRepo.get() in the following operations.
+      synchronized (this) {
+        this.notebookRepo.save(note, subject);
+      }
     }
   }
 
@@ -218,7 +223,6 @@ public class NoteManager {
   public void moveNote(String noteId,
                        String newNotePath,
                        AuthenticationInfo subject) throws IOException {
-    String notePath = this.notesInfo.get(noteId);
     if (noteId == null) {
       throw new IOException("No metadata found for this note: " + noteId);
     }
@@ -228,6 +232,7 @@ public class NoteManager {
     }
 
     // move the old NoteNode from notePath to newNotePath
+    String notePath = this.notesInfo.get(noteId);
     NoteNode noteNode = getNoteNode(notePath);
     noteNode.getParent().removeNote(getNoteName(notePath));
     noteNode.setNotePath(newNotePath);
@@ -317,10 +322,10 @@ public class NoteManager {
    */
   public <T> T processNote(String noteId, boolean reload, NoteProcessor<T> noteProcessor)
       throws IOException {
-    String notePath = this.notesInfo.get(noteId);
-    if (notePath == null) {
+    if (this.notesInfo == null || noteId == null || !this.notesInfo.containsKey(noteId)) {
       return noteProcessor.process(null);
     }
+    String notePath = this.notesInfo.get(noteId);
     NoteNode noteNode = getNoteNode(notePath);
     return noteNode.loadAndProcessNote(reload, noteProcessor);
   }
@@ -433,9 +438,9 @@ public class NoteManager {
     private NoteCache noteCache;
 
     // noteName -> NoteNode
-    private Map<String, NoteNode> notes = new HashMap<>();
+    private Map<String, NoteNode> notes = new ConcurrentHashMap<>();
     // folderName -> Folder
-    private Map<String, Folder> subFolders = new HashMap<>();
+    private Map<String, Folder> subFolders = new ConcurrentHashMap<>();
 
     public Folder(String name, NotebookRepo notebookRepo, NoteCache noteCache) {
       this.name = name;
@@ -731,7 +736,6 @@ public class NoteManager {
         if (size() <= NoteCache.this.threshold) {
           return false;
         }
-
         final Note eldestNote = eldest.getValue();
         final Lock lock = eldestNote.getLock().writeLock();
         if (lock.tryLock()) { // avoid eviction in case the note is in use
@@ -743,11 +747,32 @@ public class NoteManager {
         } else {
           LOGGER.info("Can not evict note {}, because the write lock can not be acquired. {} notes currently loaded.",
               eldestNote.getId(), size());
+          cleanupCache();
           return false;
         }
       }
-    }
 
+      private void cleanupCache() {
+        Iterator<Map.Entry<String, Note>> iterator = this.entrySet().iterator();
+        int count = 0;
+        // if size >= shrinked_size and have next() try remove
+        while ((this.size() - 1) >= NoteCache.this.threshold && iterator.hasNext()) {
+          Map.Entry<String, Note> noteEntry = iterator.next();
+          final Note note = noteEntry.getValue();
+          final Lock lock = note.getLock().writeLock();
+          if (lock.tryLock()) { // avoid eviction in case the note is in use
+            try {
+              iterator.remove(); // remove LRU element from LinkedHashMap
+              LOGGER.debug("Remove note {} from LRU Cache", note.getId());
+              ++count;
+            } finally {
+              lock.unlock();
+            }
+          }
+        }
+        LOGGER.info("The cache cleanup removes {} entries", count);
+      }
+    }
   }
 
 

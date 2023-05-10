@@ -192,6 +192,7 @@ public class PySparkInterpreter extends PythonInterpreter {
     return "python";
   }
 
+  @Override
   public ZeppelinContext getZeppelinContext() {
     if (sparkInterpreter != null) {
       return sparkInterpreter.getZeppelinContext();
@@ -233,7 +234,13 @@ public class PySparkInterpreter extends PythonInterpreter {
     }
   }
 
+  // Used by PySpark
   public boolean isSpark3() {
     return sparkInterpreter.getSparkVersion().getMajorVersion() == 3;
+  }
+
+  // Used by PySpark
+  public boolean isAfterSpark33() {
+    return sparkInterpreter.getSparkVersion().newerThanEquals(SparkVersion.SPARK_3_3_0);
   }
 }

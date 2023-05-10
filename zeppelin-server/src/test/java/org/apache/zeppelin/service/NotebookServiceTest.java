@@ -23,8 +23,8 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.eq;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doCallRealMethod;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -39,6 +39,7 @@ import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -129,7 +130,8 @@ public class NotebookServiceTest {
             null);
     searchService = new LuceneSearch(zeppelinConfiguration, notebook);
     QuartzSchedulerService schedulerService = new QuartzSchedulerService(zeppelinConfiguration, notebook);
-    schedulerService.waitForFinishInit();
+    notebook.initNotebook();
+    notebook.waitForFinishInit(1, TimeUnit.MINUTES);
     notebookService =
         new NotebookService(
             notebook, authorizationService, zeppelinConfiguration, schedulerService);
